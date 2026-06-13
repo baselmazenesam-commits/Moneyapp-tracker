@@ -1,18 +1,17 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 
 function useStored(key, initial) {
-  const [val, setVal] = useState(initial);
-  const [ready, setReady] = useState(false);
-  useEffect(() => {
-    window.storage.get(key).then(r => {
-      if (r && r.value) setVal(JSON.parse(r.value));
-      setReady(true);
-    }).catch(() => setReady(true));
-  }, [key]);
+  const [val, setVal] = useState(() => {
+    try {
+      const stored = localStorage.getItem(key);
+      return stored ? JSON.parse(stored) : initial;
+    } catch { return initial; }
+  });
+  const [ready] = useState(true);
   const set = (v) => {
     const next = typeof v === "function" ? v(val) : v;
     setVal(next);
-    window.storage.set(key, JSON.stringify(next)).catch(() => {});
+    try { localStorage.setItem(key, JSON.stringify(next)); } catch {}
   };
   return [val, set, ready];
 }
@@ -104,20 +103,19 @@ function GoalAdjust({ id, onAdjust }) {
 }
 
 function PlanTab({ income }) {
-  const [savedPlans, setSavedPlans, plansReady] = useStored("financeOS-savedplans", []);
-  const [activePlanId, setActivePlanId, activeReady] = useStored("financeOS-activeplan", null);
-  const [items, setItems] = useState([]);
+  const [savedPlans, setSavedPlans] = useStored("financeOS-savedplans", []);
+  const [activePlanId, setActivePlanId] = useStored("financeOS-activeplan", null);
+  const [localItems, setLocalItems] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [planName, setPlanName] = useState("");
   const [form, setForm] = useState({ name:"", category:"Food & Drinks", amount:"" });
 
   const activePlan = savedPlans.find(p => p.id === activePlanId) || null;
-
-  useEffect(() => {
-    if (activePlan) setItems(activePlan.items);
-    else setItems([]);
-  }, [activePlanId, plansReady]);
+  const items = activePlan ? activePlan.items : localItems;
+  const setItems = activePlan
+    ? (newItems) => setSavedPlans(savedPlans.map(p => p.id === activePlanId ? { ...p, items: typeof newItems === "function" ? newItems(p.items) : newItems } : p))
+    : setLocalItems;
 
   const totalPlanned = items.reduce((s, i) => s + i.amount, 0);
   const totalDone = items.filter(i => i.done).reduce((s, i) => s + i.amount, 0);
@@ -125,23 +123,16 @@ function PlanTab({ income }) {
   const pct = income > 0 ? Math.min(100, Math.round((totalPlanned / income) * 100)) : 0;
   const barColor = pct < 70 ? "linear-gradient(90deg,#059669,#34d399)" : pct < 90 ? "linear-gradient(90deg,#d97706,#fbbf24)" : "linear-gradient(90deg,#dc2626,#f87171)";
 
-  const syncItems = (newItems) => {
-    setItems(newItems);
-    if (activePlanId) {
-      setSavedPlans(savedPlans.map(p => p.id === activePlanId ? { ...p, items: newItems } : p));
-    }
-  };
-
   const addItem = () => {
     const amt = parseFloat(form.amount);
     if (!form.name || isNaN(amt) || amt <= 0) return;
-    syncItems([...items, { id:Date.now(), name:form.name, category:form.category, amount:amt, done:false }]);
+    setItems([...items, { id:Date.now(), name:form.name, category:form.category, amount:amt, done:false }]);
     setForm({ name:"", category:form.category, amount:"" });
     setShowForm(false);
   };
 
-  const toggle = (id) => syncItems(items.map(i => i.id === id ? { ...i, done:!i.done } : i));
-  const remove = (id) => syncItems(items.filter(i => i.id !== id));
+  const toggle = (id) => setItems(items.map(i => i.id === id ? { ...i, done:!i.done } : i));
+  const remove = (id) => setItems(items.filter(i => i.id !== id));
 
   const savePlan = () => {
     if (!planName.trim()) return;
@@ -158,12 +149,11 @@ function PlanTab({ income }) {
 
   const loadPlan = (plan) => {
     setActivePlanId(plan.id);
-    setItems(plan.items);
   };
 
   const newPlan = () => {
     setActivePlanId(null);
-    setItems([]);
+    setLocalItems([]);
   };
 
   const deletePlan = (id) => {
